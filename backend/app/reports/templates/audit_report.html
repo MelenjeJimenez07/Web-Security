@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Informe de Auditoría WebSec — {{ asset.normalized_target }}</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 15mm 20mm 15mm;
+      @top-right {
+        content: "WebSec Audit Dashboard • OWASP Top 10:2025";
+        font-size: 8pt;
+        color: #64748b;
+      }
+      @bottom-left {
+        content: "Confidencial — Solo Uso Autorizado ({{ asset.normalized_target }})";
+        font-size: 8pt;
+        color: #64748b;
+      }
+      @bottom-right {
+        content: "Página " counter(page) " de " counter(pages);
+        font-size: 8pt;
+        color: #64748b;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: "DejaVu Sans", Arial, sans-serif;
+      color: #0f172a;
+      font-size: 9.5pt;
+      line-height: 1.45;
+      margin: 0;
+    }
+
+    .header-banner {
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 18px 20px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    .header-banner h1 {
+      margin: 0 0 6px 0;
+      font-size: 16pt;
+      color: #38bdf8;
+    }
+    .header-meta {
+      font-size: 8.5pt;
+      color: #cbd5e1;
+    }
+
+    .kpi-grid {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 8px 0;
+      margin: 0 -8px 16px -8px;
+    }
+    .kpi-card {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 10px 12px;
+      background: #f8fafc;
+      vertical-align: top;
+      width: 25%;
+    }
+    .kpi-label { font-size: 7.5pt; text-transform: uppercase; color: #64748b; font-weight: bold; }
+    .kpi-value { font-size: 16pt; font-weight: bold; margin-top: 4px; color: #0f172a; }
+    .grade-A, .grade-A-plus { color: #059669; }
+    .grade-B { color: #0284c7; }
+    .grade-C { color: #d97706; }
+    .grade-D { color: #ea580c; }
+    .grade-F { color: #dc2626; }
+
+    h2 {
+      font-size: 12pt;
+      color: #0f172a;
+      border-bottom: 2px solid #0284c7;
+      padding-bottom: 4px;
+      margin: 18px 0 10px 0;
+      page-break-after: avoid;
+    }
+    h3 {
+      font-size: 10pt;
+      color: #1e293b;
+      margin: 12px 0 6px 0;
+      page-break-after: avoid;
+    }
+
+    .summary-box {
+      background: #f1f5f9;
+      border-left: 4px solid #0284c7;
+      padding: 10px 12px;
+      border-radius: 4px;
+      margin-bottom: 14px;
+    }
+
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      font-size: 8.5pt;
+    }
+    table.data-table th {
+      background: #1e293b;
+      color: #f8fafc;
+      text-align: left;
+      padding: 6px 8px;
+      font-weight: bold;
+    }
+    table.data-table td {
+      border-bottom: 1px solid #e2e8f0;
+      padding: 6px 8px;
+      vertical-align: top;
+    }
+    table.data-table tr:nth-child(even) td { background: #f8fafc; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 7.5pt;
+      font-weight: bold;
+      text-transform: uppercase;
+    }
+    .sev-critical { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+    .sev-high { background: #ffedd5; color: #c2410c; border: 1px solid #fdba74; }
+    .sev-medium { background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; }
+    .sev-low { background: #cffafe; color: #0e7490; border: 1px solid #67e8f9; }
+    .sev-info { background: #e2e8f0; color: #334155; border: 1px solid #cbd5e1; }
+
+    .comp-pass { background: #d1fae5; color: #065f46; }
+    .comp-warning { background: #fef3c7; color: #92400e; }
+    .comp-critical { background: #fee2e2; color: #991b1b; }
+
+    .finding-card {
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      page-break-inside: avoid;
+    }
+    .finding-title {
+      font-weight: bold;
+      font-size: 10pt;
+      margin: 4px 0;
+    }
+    .mono {
+      font-family: "DejaVu Sans Mono", monospace;
+      font-size: 8pt;
+    }
+    pre.snippet {
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-family: "DejaVu Sans Mono", monospace;
+      font-size: 7.5pt;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 6px 0;
+    }
+    .remediation-box {
+      background: #ecfdf5;
+      border-left: 3px solid #10b981;
+      padding: 8px 10px;
+      margin-top: 6px;
+      font-size: 8.5pt;
+    }
+    .page-break { page-break-before: always; }
+  </style>
+</head>
+<body>
+  <div class="header-banner">
+    <h1>Informe de Auditoría de Seguridad Web &amp; Infraestructura</h1>
+    <div class="header-meta">
+      <strong>Activo:</strong> {{ asset.name }} ({{ asset.normalized_target }}) |
+      <strong>IP Validada:</strong> {{ asset.resolved_ip or "N/A" }} |
+      <strong>Tipo de Informe:</strong> {{ report_metadata.report_type | upper }}<br />
+      <strong>Estándar:</strong> {{ report_metadata.standard }} |
+      <strong>Generado:</strong> {{ report_metadata.generated_at }} |
+      <strong>Solicitado por:</strong> {{ audit.requested_by }}
+    </div>
+  </div>
+
+  <table class="kpi-grid">
+    <tr>
+      <td class="kpi-card">
+        <div class="kpi-label">Calificación Global</div>
+        <div class="kpi-value grade-{{ (audit.security_grade or '') | replace('+', '-plus') }}">{{ audit.security_grade }}</div>
+        <div style="font-size: 8pt; color: #475569;">Puntaje: {{ audit.security_score if audit.security_score is not none else "N/A" }}/100</div>
+      </td>
+      <td class="kpi-card">
+        <div class="kpi-label">Total Hallazgos</div>
+        <div class="kpi-value">{{ audit.total_findings }}</div>
+        <div style="font-size: 8pt; color: #475569;">Perfil: {{ audit.scan_profile }}</div>
+      </td>
+      <td class="kpi-card">
+        <div class="kpi-label">Críticos / Altos</div>
+        <div class="kpi-value" style="color: #dc2626;">{{ audit.severity_counts.critical + audit.severity_counts.high }}</div>
+        <div style="font-size: 8pt; color: #475569;">C: {{ audit.severity_counts.critical }} | A: {{ audit.severity_counts.high }}</div>
+      </td>
+      <td class="kpi-card">
+        <div class="kpi-label">Gobernanza</div>
+        <div class="kpi-value" style="font-size: 11pt; color: #059669;">
+          {{ "Autorizado" if audit.authorization_confirmed else "No Autorizado" }}
+        </div>
+        <div style="font-size: 8pt; color: #475569;">
+          Propiedad: {{ "Verificada" if audit.ownership_verified_at_launch else "No Verificada" }}
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <h2>1. Resumen Ejecutivo</h2>
+  <div class="summary-box">
+    {{ executive_summary }}
+  </div>
+
+  <h3>Distribución por Severidad</h3>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Severidad</th>
+        <th>Cantidad</th>
+        <th>Porcentaje</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for group in findings_by_severity %}
+      <tr>
+        <td><span class="badge sev-{{ group.severity }}">{{ group.label }}</span></td>
+        <td class="mono">{{ group.count }}</td>
+        <td class="mono">
+          {% if audit.total_findings > 0 %}
+            {{ ((group.count / audit.total_findings) * 100) | round(1) }}%
+          {% else %}
+            0.0%
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>2. Matriz de Cumplimiento — OWASP Top 10:2025</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Código</th>
+        <th>Categoría OWASP Top 10:2025</th>
+        <th>C</th>
+        <th>A</th>
+        <th>M</th>
+        <th>B</th>
+        <th>I</th>
+        <th>Estado de Cumplimiento</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in compliance_matrix %}
+      <tr>
+        <td class="mono"><strong>{{ row.code }}</strong></td>
+        <td>
+          <strong>{{ row.name_es }}</strong><br />
+          <span style="color: #64748b; font-size: 7.5pt;">{{ row.name }}</span>
+        </td>
+        <td class="mono">{{ row.severity_counts.critical }}</td>
+        <td class="mono">{{ row.severity_counts.high }}</td>
+        <td class="mono">{{ row.severity_counts.medium }}</td>
+        <td class="mono">{{ row.severity_counts.low }}</td>
+        <td class="mono">{{ row.severity_counts.info }}</td>
+        <td>
+          <span class="badge comp-{{ row.compliance_badge }}">{{ row.compliance_status }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if report_metadata.report_type != "executive" %}
+  <div class="page-break"></div>
+  <h2>3. Hallazgos Detallados por Categoría OWASP Top 10:2025</h2>
+  {% if not findings_by_owasp %}
+    <p>No se registraron hallazgos técnicos en esta ejecución.</p>
+  {% else %}
+    {% for group in findings_by_owasp %}
+      <h3>{{ group.code }} — {{ group.name_es }} ({{ group.count }})</h3>
+      {% for f in group.findings %}
+        <div class="finding-card">
+          <div>
+            <span class="badge sev-{{ f.severity }}">{{ f.severity_label }}</span>
+            <span class="badge sev-info mono">{{ f.owasp_category_code }}</span>
+            {% if f.cwe_id %}<span class="badge sev-info mono">{{ f.cwe_id }}</span>{% endif %}
+            {% if f.cvss_score is not none %}<span class="badge sev-medium mono">CVSS {{ f.cvss_score }}</span>{% endif %}
+            <span class="mono" style="color: #475569; margin-left: 6px;">Módulo: {{ f.module_key }}</span>
+          </div>
+          <div class="finding-title">{{ f.title }}</div>
+          {% if f.affected_component %}
+            <div class="mono" style="color: #0369a1; margin-bottom: 4px;">Componente: {{ f.affected_component }}</div>
+          {% endif %}
+          <p style="margin: 4px 0;">{{ f.technical_description }}</p>
+          {% if f.cve_ids %}
+            <div class="mono" style="color: #b91c1c; margin: 4px 0;">CVEs: {{ f.cve_ids | join(", ") }}</div>
+          {% endif %}
+          <div class="remediation-box">
+            <strong>Remediación:</strong> {{ f.remediation_steps }}
+          </div>
+          {% for lang, snippet in f.remediation_snippets.items() %}
+            <div class="mono" style="margin-top: 6px; font-weight: bold;">Snippet ({{ lang }}):</div>
+            <pre class="snippet">{{ snippet }}</pre>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    {% endfor %}
+  {% endif %}
+  {% endif %}
+
+  <h2>4. Guía Paso a Paso de Mitigación Priorizada</h2>
+  {% if not remediation_roadmap %}
+    <p>No se requieren acciones correctivas urgentes (sin hallazgos críticos, altos ni medios).</p>
+  {% else %}
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Prioridad</th>
+          <th>OWASP</th>
+          <th>Hallazgo</th>
+          <th>Acción Recomendada</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for step in remediation_roadmap %}
+        <tr>
+          <td class="mono">{{ loop.index }}</td>
+          <td><span class="badge sev-{{ step.severity }}">{{ step.priority }}</span></td>
+          <td class="mono">{{ step.owasp_code }}</td>
+          <td><strong>{{ step.title }}</strong></td>
+          <td>{{ step.remediation_steps }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <h2>5. Ejecución de Módulos de Auditoría</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Módulo</th>
+        <th>Estado</th>
+        <th>Hallazgos</th>
+        <th>Duración (ms)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for mod in module_executions %}
+      <tr>
+        <td><strong>{{ mod.module_name }}</strong> <span class="mono">({{ mod.module_key }})</span></td>
+        <td class="mono">{{ mod.status }}</td>
+        <td class="mono">{{ mod.findings_count }}</td>
+        <td class="mono">{{ mod.duration_ms if mod.duration_ms is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
