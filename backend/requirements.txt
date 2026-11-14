@@ -13,7 +13,7 @@ alembic>=1.14.0,<2.0.0
 
 # Task Queue & Messaging
 celery[redis]>=5.4.0,<6.0.0
-redis>=5.2.0,<6.0.0
+redis>=6.1.0,<8.0.0
 
 # Auditing, Network & Security Parsing Modules
 httpx>=0.27.2,<1.0.0
@@ -25,5 +25,6 @@ lxml>=5.3.0,<7.0.0
 
 # Reporting & Structured Observability
 weasyprint>=63.0,<69.0
+python-docx>=1.1.2,<2.0.0
 jinja2>=3.1.4,<4.0.0
 structlog>=24.4.0,<26.0.0

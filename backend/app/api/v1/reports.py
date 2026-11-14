@@ -145,9 +145,12 @@ async def download_report(
     if not safe_path.is_file():
         raise ResourceNotFoundError("El archivo de reporte ya no existe en almacenamiento.")
 
-    media_type = (
-        "application/pdf" if report.format == ReportFormat.PDF else "application/json"
-    )
+    media_types = {
+        ReportFormat.PDF: "application/pdf",
+        ReportFormat.JSON: "application/json",
+        ReportFormat.DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }
+    media_type = media_types.get(report.format, "application/octet-stream")
     return FileResponse(
         path=safe_path,
         filename=report.file_name,

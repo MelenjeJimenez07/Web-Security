@@ -6,6 +6,7 @@ import {
   Download,
   FileDown,
   FileJson,
+  FileText,
   Loader2,
   RefreshCw,
   XCircle,
@@ -13,6 +14,7 @@ import {
 import { FindingsExplorer } from "@/components/audits/FindingsExplorer";
 import { LiveAuditConsole } from "@/components/audits/LiveAuditConsole";
 import { OwaspTop10Chart } from "@/components/charts/OwaspTop10Chart";
+import { RiskMatrixChart } from "@/components/charts/RiskMatrixChart";
 import { SeverityDistributionChart } from "@/components/charts/SeverityDistributionChart";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -321,6 +323,15 @@ export function AuditDetailView({
                 size="sm"
                 variant="secondary"
                 disabled={exportingFormat !== null}
+                onClick={() => void handleExportReport("docx")}
+              >
+                <FileText className="h-3.5 w-3.5" />
+                {exportingFormat === "docx" ? "Generando DOCX..." : "Exportar DOCX"}
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={exportingFormat !== null}
                 onClick={() => void handleExportReport("json")}
               >
                 <FileJson className="h-3.5 w-3.5" />
@@ -457,21 +468,24 @@ export function AuditDetailView({
           )}
 
           {activeTab === "charts" && (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-              <div className="xl:col-span-5">
-                <SeverityDistributionChart
-                  distribution={{
-                    critical: detail.critical_count,
-                    high: detail.high_count,
-                    medium: detail.medium_count,
-                    low: detail.low_count,
-                    info: detail.info_count,
-                  }}
-                />
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+                <div className="xl:col-span-5">
+                  <SeverityDistributionChart
+                    distribution={{
+                      critical: detail.critical_count,
+                      high: detail.high_count,
+                      medium: detail.medium_count,
+                      low: detail.low_count,
+                      info: detail.info_count,
+                    }}
+                  />
+                </div>
+                <div className="xl:col-span-7">
+                  <OwaspTop10Chart data={detail.owasp_distribution} />
+                </div>
               </div>
-              <div className="xl:col-span-7">
-                <OwaspTop10Chart data={detail.owasp_distribution} />
-              </div>
+              <RiskMatrixChart findings={findings} />
             </div>
           )}
 
@@ -503,15 +517,15 @@ export function AuditDetailView({
           {activeTab === "reports" && (
             <Card>
               <CardHeader>
-                <CardTitle>Historial de Reportes Exportados (PDF / JSON)</CardTitle>
+                <CardTitle>Historial de Reportes Exportados (PDF / DOCX / JSON)</CardTitle>
                 <CardDescription>
-                  Informes con matriz de cumplimiento OWASP Top 10:2025, agrupación por severidad y guía de mitigación.
+                  Informes con matriz de cumplimiento OWASP Top 10:2025, matriz de riesgo 5×5, agrupación por severidad y guía de mitigación.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 {reports.length === 0 ? (
                   <p className="py-8 text-center text-sm text-slate-400">
-                    Aún no se han generado reportes para esta auditoría. Usa los botones "Exportar PDF" o "Exportar JSON" en la barra superior.
+                    Aún no se han generado reportes para esta auditoría. Usa los botones "Exportar PDF", "Exportar DOCX" o "Exportar JSON" en la barra superior.
                   </p>
                 ) : (
                   <div className="overflow-x-auto">

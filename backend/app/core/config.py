@@ -37,6 +37,8 @@ class Settings(BaseSettings):
 
     # Security & Governance Controls
     REQUIRE_DOMAIN_VERIFICATION: bool = True
+    ALLOW_LAB_LOCAL_TARGETS: bool = False
+    LAB_TARGET_ALLOWLIST: list[str] = Field(default_factory=list)
     CORS_ORIGINS: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",

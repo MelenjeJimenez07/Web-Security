@@ -92,6 +92,8 @@ def _create_sample_audit(db_session: Session) -> AuditRun:
                 title="Cabecera Content-Security-Policy (CSP) ausente",
                 technical_description="Sin CSP frente a XSS.",
                 severity=SeverityLevel.HIGH,
+                cvss_score=7.5,
+                cvss_vector="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N",
                 cwe_id="CWE-693",
                 affected_component="https://example.com",
                 remediation_steps="Configurar CSP estricta.",
@@ -161,6 +163,7 @@ def test_report_builder_html_autoescape_and_json_export(
 
     context = build_report_context(run, categories, report_type=ReportType.FULL)
     assert len(context["compliance_matrix"]) == 10
+    assert len(context["risk_matrix"]["rows"]) == 5
     assert context["audit"]["security_grade"] == "B"
     assert len(context["remediation_roadmap"]) == 2
 
@@ -168,6 +171,8 @@ def test_report_builder_html_autoescape_and_json_export(
     rendered_html = render_report_html(context)
     assert "<script>alert(1)</script>" not in rendered_html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered_html
+    assert "Matriz de Riesgo" in rendered_html
+    assert "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N" in rendered_html
 
     # Test JSON report export & SHA-256 verification
     json_report = generate_audit_report_file(
@@ -217,3 +222,93 @@ def test_pdf_export_and_path_traversal_guard(
     # Path traversal check
     with pytest.raises(ResourceNotFoundError):
         resolve_safe_report_path("/etc/passwd")
+
+
+def test_docx_export_with_mocked_python_docx(
+    db_session: Session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _create_sample_audit(db_session)
+    categories = list(
+        db_session.scalars(select(OwaspCategory).order_by(OwaspCategory.rank.asc())).all()
+    )
+
+    class _FakeRun:
+        bold = False
+
+    class _FakeParagraphFormat:
+        line_spacing = 1.0
+        left_indent = 0
+        first_line_indent = 0
+
+    class _FakeParagraph:
+        def __init__(self, text: str = "") -> None:
+            self.text = text
+            self.alignment = 0
+            self.runs = [_FakeRun()]
+            self.paragraph_format = _FakeParagraphFormat()
+
+    class _FakeCell:
+        def __init__(self) -> None:
+            self.text = ""
+            self.paragraphs = [_FakeParagraph()]
+
+    class _FakeRow:
+        def __init__(self, cols: int) -> None:
+            self.cells = [_FakeCell() for _ in range(cols)]
+
+    class _FakeTable:
+        def __init__(self, rows: int, cols: int) -> None:
+            self.style = ""
+            self.rows = [_FakeRow(cols) for _ in range(rows)]
+
+    class _FakeSection:
+        top_margin = 0
+        bottom_margin = 0
+        left_margin = 0
+        right_margin = 0
+
+    class _FakeNormalStyle:
+        def __init__(self) -> None:
+            self.font = types.SimpleNamespace(name="Calibri", size=11)
+            self.paragraph_format = _FakeParagraphFormat()
+
+    class FakeDocument:
+        def __init__(self) -> None:
+            self.sections = [_FakeSection()]
+            self.styles = {"Normal": _FakeNormalStyle()}
+            self.headings: list[str] = []
+
+        def add_heading(self, text: str, level: int = 1) -> _FakeParagraph:
+            self.headings.append(f"H{level}:{text}")
+            return _FakeParagraph(text)
+
+        def add_paragraph(self, text: str = "") -> _FakeParagraph:
+            return _FakeParagraph(text)
+
+        def add_page_break(self) -> None:
+            return None
+
+        def add_table(self, rows: int, cols: int) -> _FakeTable:
+            return _FakeTable(rows, cols)
+
+        def save(self, path: str) -> None:
+            Path(path).write_bytes(b"PK\x03\x04MockDocxPayload")
+
+    fake_docx = types.ModuleType("docx")
+    fake_docx.Document = FakeDocument  # type: ignore[attr-defined]
+    fake_shared = types.ModuleType("docx.shared")
+    fake_shared.Cm = lambda v: v  # type: ignore[attr-defined]
+    fake_shared.Pt = lambda v: v  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "docx", fake_docx)
+    monkeypatch.setitem(sys.modules, "docx.shared", fake_shared)
+
+    docx_report = generate_audit_report_file(
+        run,
+        categories,
+        report_format=ReportFormat.DOCX,
+        report_type=ReportType.FULL,
+        output_dir=tmp_path,
+    )
+    assert docx_report.file_path.suffix == ".docx"
+    assert docx_report.file_path.exists()
+    assert docx_report.sha256_checksum == hashlib.sha256(docx_report.file_path.read_bytes()).hexdigest()

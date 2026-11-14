@@ -52,8 +52,21 @@ websec-audit-dashboard/
 ## Exportación de Reportes (API v1)
 
 - `GET /api/v1/audits/{audit_id}/reports` — Lista los reportes generados para una auditoría.
-- `POST /api/v1/audits/{audit_id}/reports` — Genera un reporte en `pdf` o `json` (`report_type`: `full`, `executive` o `technical`) con checksum SHA-256.
+- `POST /api/v1/audits/{audit_id}/reports` — Genera un reporte en `pdf`, `docx` o `json` (`report_type`: `full`, `executive` o `technical`) con matriz de riesgo 5×5, vector CVSS y checksum SHA-256.
 - `GET /api/v1/reports/{report_id}/download` — Descarga segura con `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff` y registro en `security_event_logs` (`REPORT_EXPORTED`).
+
+## Modo Laboratorio Local Opcional (Desarrollo)
+
+Por defecto el sistema bloquea direcciones privadas/loopback (`SSRFBlockedError`) y exige verificación de dominio (`REQUIRE_DOMAIN_VERIFICATION=true`). Para auditar únicamente una aplicación de práctica autorizada en desarrollo local, configura explícitamente en `.env`:
+
+```dotenv
+APP_ENV=development
+ALLOW_LAB_LOCAL_TARGETS=true
+LAB_TARGET_ALLOWLIST=["host.docker.internal"]
+REQUIRE_DOMAIN_VERIFICATION=false
+```
+
+*(Los rangos de metadatos cloud `169.254.0.0/16` y hosts fuera de la allowlist permanecen siempre bloqueados.)*
 
 ## Inicio Rápido
 

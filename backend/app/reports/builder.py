@@ -25,6 +25,104 @@ _SEVERITY_LABELS: dict[SeverityLevel, str] = {
     SeverityLevel.INFO: "Informativo",
 }
 
+_RISK_AXIS_LABELS: dict[int, str] = {
+    1: "Muy bajo",
+    2: "Bajo",
+    3: "Medio",
+    4: "Alto",
+    5: "Muy alto",
+}
+
+
+def _compute_risk_position(item: dict[str, Any]) -> tuple[int, int]:
+    """Map a serialized finding onto (likelihood 1..5, impact 1..5) for the 5x5 risk matrix."""
+    severity = item["severity"]
+    cvss = item.get("cvss_score")
+    module_key = item.get("module_key", "")
+
+    if severity == "critical":
+        impact = 5
+        likelihood = 5 if (cvss is not None and cvss >= 9.5) else 4
+    elif severity == "high":
+        impact = 4
+        likelihood = 3 if (module_key in ("dns_passive", "tech_supply_chain") and (cvss is None or cvss < 8.0)) else 4
+    elif severity == "medium":
+        impact = 3
+        likelihood = 3
+    elif severity == "low":
+        impact = 2
+        likelihood = 3 if module_key in ("http_headers", "dns_passive") else 2
+    else:
+        impact = 1
+        likelihood = 2
+    return likelihood, impact
+
+
+def _risk_zone_for_cell(likelihood: int, impact: int) -> tuple[str, str]:
+    product = likelihood * impact
+    if product >= 15:
+        return "critical", "Crítico"
+    if product >= 10:
+        return "high", "Alto"
+    if product >= 5:
+        return "medium", "Medio"
+    if product >= 3:
+        return "low", "Bajo"
+    return "very_low", "Muy bajo"
+
+
+def _build_risk_matrix(serialized_findings: list[dict[str, Any]]) -> dict[str, Any]:
+    """Assemble 5x5 Likelihood x Impact matrix rows ordered top-to-bottom (5 down to 1)."""
+    cell_buckets: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
+    for item in serialized_findings:
+        likelihood, impact = _compute_risk_position(item)
+        item["likelihood_score"] = likelihood
+        item["impact_score"] = impact
+        item["likelihood_label"] = _RISK_AXIS_LABELS[likelihood]
+        item["impact_label"] = _RISK_AXIS_LABELS[impact]
+        _, zone_label = _risk_zone_for_cell(likelihood, impact)
+        item["risk_zone"] = zone_label
+        cell_buckets[(likelihood, impact)].append(
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "owasp_category_code": item["owasp_category_code"],
+                "severity": item["severity"],
+                "cvss_score": item["cvss_score"],
+                "cvss_vector": item["cvss_vector"],
+            }
+        )
+
+    rows = []
+    for likelihood in range(5, 0, -1):
+        cells = []
+        for impact in range(1, 6):
+            zone_key, zone_label = _risk_zone_for_cell(likelihood, impact)
+            bucket = cell_buckets.get((likelihood, impact), [])
+            cells.append(
+                {
+                    "likelihood": likelihood,
+                    "impact": impact,
+                    "zone_key": zone_key,
+                    "zone_label": zone_label,
+                    "count": len(bucket),
+                    "findings": bucket,
+                }
+            )
+        rows.append(
+            {
+                "likelihood": likelihood,
+                "label": _RISK_AXIS_LABELS[likelihood],
+                "cells": cells,
+            }
+        )
+
+    return {
+        "likelihood_levels": [{"level": lvl, "label": _RISK_AXIS_LABELS[lvl]} for lvl in range(5, 0, -1)],
+        "impact_levels": [{"level": lvl, "label": _RISK_AXIS_LABELS[lvl]} for lvl in range(1, 6)],
+        "rows": rows,
+    }
+
 
 def _serialize_finding(finding: Finding, owasp_map: dict[str, OwaspCategory]) -> dict[str, Any]:
     cat = owasp_map.get(finding.owasp_category_code)
@@ -40,6 +138,7 @@ def _serialize_finding(finding: Finding, owasp_map: dict[str, OwaspCategory]) ->
         "severity": finding.severity.value,
         "severity_label": _SEVERITY_LABELS.get(finding.severity, finding.severity.value),
         "cvss_score": finding.cvss_score,
+        "cvss_vector": finding.cvss_vector,
         "cwe_id": finding.cwe_id,
         "cve_ids": list(finding.cve_ids or []),
         "affected_component": finding.affected_component,
@@ -193,6 +292,13 @@ def build_report_context(
         for me in audit_run.module_executions
     ]
 
+    risk_matrix = _build_risk_matrix(serialized_findings)
+    discovery_summary: dict[str, Any] = {}
+    for me in audit_run.module_executions:
+        if me.module_key == "http_headers" and isinstance(me.raw_output, dict):
+            discovery_summary = me.raw_output.get("discovery_files") or {}
+            break
+
     return {
         "report_metadata": {
             "standard": "OWASP Top 10:2025",
@@ -238,6 +344,8 @@ def build_report_context(
         },
         "executive_summary": _build_executive_summary(audit_run),
         "compliance_matrix": compliance_matrix,
+        "risk_matrix": risk_matrix,
+        "discovery_summary": discovery_summary,
         "findings_by_severity": findings_by_severity_groups,
         "findings_by_owasp": findings_by_owasp_groups,
         "remediation_roadmap": remediation_roadmap,

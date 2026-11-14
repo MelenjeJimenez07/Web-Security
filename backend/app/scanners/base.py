@@ -31,6 +31,7 @@ class FindingDraft:
     cwe_id: str | None = None
     cve_ids: list[str] = field(default_factory=list)
     cvss_score: float | None = None
+    cvss_vector: str | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
     remediation_snippets: dict[str, str] = field(default_factory=dict)
     references: list[str] = field(default_factory=list)

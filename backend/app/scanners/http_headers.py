@@ -272,6 +272,9 @@ class HttpHeadersScanner(BaseAuditScanner):
         if leaks:
             score -= 15.0
 
+        # 6. Passive inspection of standard discovery files (robots.txt & sitemap.xml)
+        discovery_files = self._check_discovery_files(ctx, findings)
+
         final_score = max(0.0, round(score, 1))
         grade = score_to_grade(final_score)
 
@@ -297,11 +300,14 @@ class HttpHeadersScanner(BaseAuditScanner):
                     {k: v for k, v in c.items() if k != "raw"} for c in parsed_cookies
                 ],
                 "error_leaks_detected": leaks,
+                "discovery_files": discovery_files,
             },
             summary_metrics={
                 "http_grade": grade,
                 "http_score": final_score,
                 "cookies_analyzed": len(parsed_cookies),
+                "robots_txt_present": discovery_files["robots_txt"]["present"],
+                "sitemap_xml_present": discovery_files["sitemap_xml"]["present"],
             },
         )
 
@@ -581,3 +587,137 @@ class HttpHeadersScanner(BaseAuditScanner):
                 )
             )
         return matched_signatures
+
+    def _check_discovery_files(
+        self,
+        ctx: ScanContext,
+        findings: list[FindingDraft],
+    ) -> dict[str, Any]:
+        """Passively inspect standard /robots.txt and /sitemap.xml without wordlist fuzzing."""
+        base_url = ctx.build_base_url()
+        sensitive_keywords = (
+            "/admin",
+            "/panel",
+            "/backup",
+            "/config",
+            "/private",
+            "/internal",
+            "/debug",
+            "/swagger",
+            "/api-docs",
+            "/.git",
+            "/.env",
+            "/db",
+            "/phpinfo",
+            "/console",
+            "/staging",
+        )
+
+        robots_info: dict[str, Any] = {
+            "url": f"{base_url}/robots.txt",
+            "present": False,
+            "status_code": None,
+            "disallow_paths": [],
+            "sensitive_disallows": [],
+            "sitemaps": [],
+        }
+        try:
+            robots_resp, _ = safe_http_get(
+                robots_resp_url := f"{base_url}/robots.txt",
+                timeout_seconds=5.0,
+                verify_tls=False,
+            )
+            robots_info["url"] = robots_resp.url or robots_resp_url
+            robots_info["status_code"] = robots_resp.status_code
+            ctype = robots_resp.headers.get("content-type", "").lower()
+            sample = robots_resp.text[:32768]
+            if robots_resp.status_code == 200 and "<html" not in sample[:512].lower() and "html" not in ctype:
+                disallows: list[str] = []
+                sensitive_hits: list[str] = []
+                declared_sitemaps: list[str] = []
+                for raw_line in sample.splitlines():
+                    line = raw_line.split("#", 1)[0].strip()
+                    if not line:
+                        continue
+                    lower_line = line.lower()
+                    if lower_line.startswith("disallow:"):
+                        path_val = line.split(":", 1)[1].strip()
+                        if path_val and path_val not in disallows:
+                            disallows.append(path_val)
+                            if any(kw in path_val.lower() for kw in sensitive_keywords):
+                                sensitive_hits.append(path_val)
+                    elif lower_line.startswith("sitemap:"):
+                        sm_val = line.split(":", 1)[1].strip()
+                        if sm_val and sm_val not in declared_sitemaps:
+                            declared_sitemaps.append(sm_val)
+
+                if disallows or declared_sitemaps or "user-agent:" in sample.lower():
+                    robots_info["present"] = True
+                    robots_info["disallow_paths"] = disallows[:50]
+                    robots_info["sensitive_disallows"] = sensitive_hits[:25]
+                    robots_info["sitemaps"] = declared_sitemaps[:10]
+
+                if sensitive_hits:
+                    ctx.log(
+                        f"robots.txt declara {len(sensitive_hits)} ruta(s) potencialmente sensible(s).",
+                        level="warning",
+                        data={"sensitive_disallows": sensitive_hits[:10]},
+                    )
+                    findings.append(
+                        FindingDraft(
+                            title=f"Rutas administrativas o sensibles declaradas en robots.txt ({len(sensitive_hits)})",
+                            technical_description=(
+                                f"El archivo público {robots_info['url']} contiene directivas Disallow "
+                                f"que referencian rutas potencialmente sensibles: {', '.join(sensitive_hits[:10])}. "
+                                "robots.txt es de acceso público y no restringe el acceso real."
+                            ),
+                            severity=SeverityLevel.LOW,
+                            owasp_category_code="A02:2025",
+                            secondary_owasp_codes=["A01:2025"],
+                            affected_component=robots_info["url"],
+                            cwe_id="CWE-200",
+                            evidence={
+                                "robots_url": robots_info["url"],
+                                "sensitive_disallows": sensitive_hits[:25],
+                                "total_disallows": len(disallows),
+                            },
+                            remediation_steps=(
+                                "No depender de robots.txt para ocultar paneles o recursos privados; aplicar "
+                                "autenticación robusta y control de acceso explícito en el servidor."
+                            ),
+                            references=["https://owasp.org/Top10/2025/"],
+                        )
+                    )
+        except SSRFBlockedError:
+            raise
+        except Exception:
+            pass
+
+        sitemap_info: dict[str, Any] = {
+            "url": f"{base_url}/sitemap.xml",
+            "present": False,
+            "status_code": None,
+            "url_count": 0,
+        }
+        try:
+            sm_resp, _ = safe_http_get(
+                f"{base_url}/sitemap.xml",
+                timeout_seconds=5.0,
+                verify_tls=False,
+            )
+            sitemap_info["url"] = sm_resp.url
+            sitemap_info["status_code"] = sm_resp.status_code
+            sm_sample = sm_resp.text[:131072]
+            if sm_resp.status_code == 200 and ("<urlset" in sm_sample.lower() or "<sitemapindex" in sm_sample.lower()):
+                sitemap_info["present"] = True
+                sitemap_info["url_count"] = len(re.findall(r"<loc>", sm_sample, re.IGNORECASE))
+                ctx.log(
+                    f"sitemap.xml accesible con {sitemap_info['url_count']} URL(s) listadas.",
+                    level="info",
+                )
+        except SSRFBlockedError:
+            raise
+        except Exception:
+            pass
+
+        return {"robots_txt": robots_info, "sitemap_xml": sitemap_info}

@@ -22,6 +22,7 @@ class FindingOut(BaseModel):
     technical_description: str
     severity: SeverityLevel
     cvss_score: float | None
+    cvss_vector: str | None = None
     cwe_id: str | None
     cve_ids: list[str]
     affected_component: str | None

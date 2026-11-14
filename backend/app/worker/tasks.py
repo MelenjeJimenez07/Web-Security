@@ -285,6 +285,7 @@ def run_audit_task(self: Any, audit_run_id_str: str) -> dict[str, Any]:
                             technical_description=draft.technical_description,
                             severity=draft.severity,
                             cvss_score=draft.cvss_score,
+                            cvss_vector=draft.cvss_vector,
                             cwe_id=draft.cwe_id,
                             cve_ids=draft.cve_ids,
                             affected_component=(

@@ -256,6 +256,11 @@ export function FindingsExplorer({ findings, onStatusChange }: FindingsExplorerP
                           Componente afectado: {selectedFinding.affected_component}
                         </p>
                       )}
+                      {selectedFinding.cvss_vector && (
+                        <p className="font-mono text-xs text-amber-300 break-all">
+                          Vector CVSS: {selectedFinding.cvss_vector}
+                        </p>
+                      )}
                     </div>
 
                     <div className="w-44 shrink-0">

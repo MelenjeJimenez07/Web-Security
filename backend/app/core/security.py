@@ -19,17 +19,23 @@ from app.models.enums import TargetType, VerificationMethod
 settings = get_settings()
 
 # Strict RFC-1123 hostname validation (prevents shell metacharacters & CLI option injection)
+# Brackets [] are validated specifically for RFC 3986 IPv6 URLs in parse_and_normalize_target.
 _HOSTNAME_LABEL_RE = re.compile(r"^(?!-)[a-zA-Z0-9-]{1,63}(?<!-)$")
-_FORBIDDEN_CHARS_RE = re.compile(r"[\s;&|`$<>\\\'\"!\(\)\{\}\[\]\n\r\t]")
+_FORBIDDEN_CHARS_RE = re.compile(r"[\s;&|`$<>\\\'\"!\(\)\{\}\n\r\t]")
 
+_NEVER_ALLOWLIST_HOSTNAMES = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata",
+    }
+)
 _BLOCKED_HOSTNAMES = frozenset(
     {
         "localhost",
         "localhost.localdomain",
         "ip6-localhost",
         "ip6-loopback",
-        "metadata.google.internal",
-        "metadata",
+        *_NEVER_ALLOWLIST_HOSTNAMES,
     }
 )
 _BLOCKED_SUFFIXES = (
@@ -41,13 +47,23 @@ _BLOCKED_SUFFIXES = (
     ".lan",
 )
 
+# Networks that remain unconditionally blocked even when ALLOW_LAB_LOCAL_TARGETS=true
+_ALWAYS_BLOCKED_LAB_NETWORKS = (
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local & Cloud metadata
+    ipaddress.ip_network("224.0.0.0/4"),  # Multicast
+    ipaddress.ip_network("240.0.0.0/4"),  # Reserved
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("fe80::/10"),  # IPv6 Link-local
+    ipaddress.ip_network("ff00::/8"),  # IPv6 Multicast
+)
+
 # Explicit CIDRs blocked to prevent SSRF against RFC1918, loopback, metadata, CGNAT, and multicast
 _BLOCKED_NETWORKS = (
-    ipaddress.ip_network("0.0.0.0/8"),
+    *_ALWAYS_BLOCKED_LAB_NETWORKS,
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("100.64.0.0/10"),  # CGNAT / RFC 6598
     ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local & Cloud metadata
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.0.0.0/24"),
     ipaddress.ip_network("192.0.2.0/24"),  # TEST-NET-1
@@ -55,13 +71,8 @@ _BLOCKED_NETWORKS = (
     ipaddress.ip_network("198.18.0.0/15"),
     ipaddress.ip_network("198.51.100.0/24"),  # TEST-NET-2
     ipaddress.ip_network("203.0.113.0/24"),  # TEST-NET-3
-    ipaddress.ip_network("224.0.0.0/4"),  # Multicast
-    ipaddress.ip_network("240.0.0.0/4"),  # Reserved
     ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("::/128"),
     ipaddress.ip_network("fc00::/7"),  # IPv6 Unique Local
-    ipaddress.ip_network("fe80::/10"),  # IPv6 Link-local
-    ipaddress.ip_network("ff00::/8"),  # IPv6 Multicast
     ipaddress.ip_network("2001:db8::/32"),  # IPv6 Documentation
 )
 
@@ -122,16 +133,64 @@ def is_public_routable_ip(ip_str: str) -> bool:
     return True
 
 
+def is_allowlisted_lab_target(hostname: str) -> bool:
+    """Return True only for explicitly allowlisted local/lab hosts in development mode."""
+    if not settings.ALLOW_LAB_LOCAL_TARGETS:
+        return False
+    if settings.APP_ENV.lower() not in {"development", "local", "test"}:
+        return False
+    lowered = hostname.strip().strip("[]").lower().rstrip(".")
+    if not lowered or lowered in _NEVER_ALLOWLIST_HOSTNAMES:
+        return False
+    allowed = {
+        entry.strip().strip("[]").lower().rstrip(".")
+        for entry in settings.LAB_TARGET_ALLOWLIST
+        if entry and entry.strip()
+    }
+    return lowered in allowed
+
+
+def _is_allowed_lab_ip(ip_str: str) -> bool:
+    """Allow loopback/RFC1918 only for allowlisted lab targets while still blocking metadata/multicast."""
+    try:
+        ip_obj = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+
+    if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped is not None:
+        return _is_allowed_lab_ip(str(ip_obj.ipv4_mapped))
+
+    if ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
+        return False
+
+    for network in _ALWAYS_BLOCKED_LAB_NETWORKS:
+        if ip_obj in network:
+            return False
+
+    return is_public_routable_ip(ip_str) or ip_obj.is_private or ip_obj.is_loopback
+
+
+def is_ip_allowed_for_scan(hostname: str, ip_str: str) -> bool:
+    """Return True if ip_str is permitted for hostname under strict or dev lab SSRF rules."""
+    if is_allowlisted_lab_target(hostname):
+        return _is_allowed_lab_ip(ip_str)
+    return is_public_routable_ip(ip_str)
+
+
 def _validate_hostname_syntax(hostname: str) -> None:
     if not hostname or len(hostname) > 253:
         raise TargetValidationError("El hostname está vacío o excede 253 caracteres.")
     if hostname.startswith("-"):
         raise TargetValidationError("Hostname inválido: no puede comenzar con '-'.")
-    if _FORBIDDEN_CHARS_RE.search(hostname):
+    if _FORBIDDEN_CHARS_RE.search(hostname) or "[" in hostname or "]" in hostname:
         raise TargetValidationError("El objetivo contiene caracteres potencialmente peligrosos.")
 
     lowered = hostname.lower().rstrip(".")
-    if lowered in _BLOCKED_HOSTNAMES or lowered.endswith(_BLOCKED_SUFFIXES):
+    allow_lab = is_allowlisted_lab_target(lowered)
+
+    if lowered in _NEVER_ALLOWLIST_HOSTNAMES or (
+        not allow_lab and (lowered in _BLOCKED_HOSTNAMES or lowered.endswith(_BLOCKED_SUFFIXES))
+    ):
         raise SSRFBlockedError(
             f"Objetivo '{hostname}' bloqueado por política anti-SSRF (nombre reservado o interno).",
             details={"hostname": hostname, "reason": "blocked_internal_hostname"},
@@ -139,13 +198,21 @@ def _validate_hostname_syntax(hostname: str) -> None:
 
     # Check if IP literal
     try:
-        ipaddress.ip_address(lowered)
-        return
+        ip_obj = ipaddress.ip_address(lowered)
     except ValueError:
-        pass
+        ip_obj = None
+
+    if ip_obj is not None:
+        ip_str = str(ip_obj)
+        if not is_ip_allowed_for_scan(lowered, ip_str):
+            raise SSRFBlockedError(
+                f"Dirección IP '{ip_str}' bloqueada por política anti-SSRF (rango privado/reservado).",
+                details={"ip": ip_str, "reason": "blocked_ip_literal"},
+            )
+        return
 
     labels = lowered.split(".")
-    if len(labels) < 2:
+    if len(labels) < 2 and not allow_lab:
         raise TargetValidationError(
             "El dominio debe incluir al menos un TLD válido (ej. example.com)."
         )
@@ -163,7 +230,13 @@ def parse_and_normalize_target(raw_target: str) -> tuple[TargetType, str, str, s
         raise TargetValidationError("El objetivo contiene espacios o caracteres no permitidos.")
 
     if "://" in cleaned:
-        parsed = urlparse(cleaned)
+        try:
+            parsed = urlparse(cleaned)
+            raw_hostname = parsed.hostname
+            port = parsed.port
+        except ValueError as exc:
+            raise TargetValidationError("Formato de URL inválido.") from exc
+
         scheme = parsed.scheme.lower()
         if scheme not in ALLOWED_SCHEMES:
             raise SSRFBlockedError(
@@ -172,31 +245,54 @@ def parse_and_normalize_target(raw_target: str) -> tuple[TargetType, str, str, s
             )
         if parsed.username or parsed.password:
             raise TargetValidationError("No se permiten credenciales embebidas en la URL.")
-        if not parsed.hostname:
+        if any("[" in part or "]" in part for part in (parsed.path, parsed.query, parsed.fragment)):
+            raise TargetValidationError("La URL contiene corchetes en una posición no permitida.")
+        if not raw_hostname:
             raise TargetValidationError("La URL no contiene un hostname válido.")
-        hostname = parsed.hostname.lower().rstrip(".")
+        hostname = raw_hostname.lower().rstrip(".")
         _validate_hostname_syntax(hostname)
-        port = parsed.port
         if port is not None and not (1 <= port <= 65535):
             raise TargetValidationError("El puerto especificado está fuera del rango 1-65535.")
         default_port = 443 if scheme == "https" else 80
         try:
             ip_literal = ipaddress.ip_address(hostname)
-            formatted_host = f"[{ip_literal}]" if isinstance(ip_literal, ipaddress.IPv6Address) else str(ip_literal)
         except ValueError:
+            ip_literal = None
+
+        if ip_literal is not None:
+            is_ipv6 = isinstance(ip_literal, ipaddress.IPv6Address)
+            if not is_ipv6 and ("[" in parsed.netloc or "]" in parsed.netloc):
+                raise TargetValidationError("Los corchetes solo se admiten para direcciones IPv6.")
+            formatted_host = f"[{ip_literal}]" if is_ipv6 else str(ip_literal)
+        else:
+            if "[" in parsed.netloc or "]" in parsed.netloc:
+                raise TargetValidationError("Los corchetes solo se admiten para direcciones IPv6.")
             formatted_host = hostname
         netloc = f"{formatted_host}:{port}" if port and port != default_port else formatted_host
         normalized = f"{scheme}://{netloc}"
         return TargetType.URL, normalized, hostname, scheme, port or default_port
 
     # Check raw IPv4 / IPv6 literal
-    host_only = cleaned.strip("[]")
+    has_brackets = cleaned.startswith("[") or cleaned.endswith("]")
+    host_only = cleaned[1:-1] if (cleaned.startswith("[") and cleaned.endswith("]")) else cleaned
     try:
         ip_obj = ipaddress.ip_address(host_only)
-        normalized_ip = str(ip_obj)
-        return TargetType.IP, normalized_ip, normalized_ip, None, None
     except ValueError:
-        pass
+        ip_obj = None
+
+    if ip_obj is not None:
+        if has_brackets and not isinstance(ip_obj, ipaddress.IPv6Address):
+            raise TargetValidationError("Los corchetes solo se admiten para direcciones IPv6.")
+        normalized_ip = str(ip_obj)
+        if not is_ip_allowed_for_scan(normalized_ip, normalized_ip):
+            raise SSRFBlockedError(
+                f"Dirección IP '{normalized_ip}' bloqueada por política anti-SSRF (rango privado/reservado).",
+                details={"ip": normalized_ip, "reason": "blocked_ip_literal"},
+            )
+        return TargetType.IP, normalized_ip, normalized_ip, None, None
+
+    if "[" in cleaned or "]" in cleaned:
+        raise TargetValidationError("El objetivo contiene corchetes en una posición no permitida.")
 
     # Handle host:port without scheme (reject ambiguous path/query)
     if "/" in cleaned or "?" in cleaned or "#" in cleaned:
@@ -210,18 +306,20 @@ def parse_and_normalize_target(raw_target: str) -> tuple[TargetType, str, str, s
 
 
 def resolve_and_validate_ips(hostname: str) -> tuple[str, ...]:
-    """Resolve hostname via system DNS and assert ALL returned IPs are publicly routable."""
+    """Resolve hostname via system DNS and enforce anti-SSRF IP validation."""
     try:
         ip_obj = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip_obj = None
+
+    if ip_obj is not None:
         ip_str = str(ip_obj)
-        if not is_public_routable_ip(ip_str):
+        if not is_ip_allowed_for_scan(hostname, ip_str):
             raise SSRFBlockedError(
                 f"Dirección IP '{ip_str}' bloqueada por política anti-SSRF (rango privado/reservado).",
                 details={"ip": ip_str},
             )
         return (ip_str,)
-    except ValueError:
-        pass
 
     try:
         addr_info = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
@@ -244,7 +342,7 @@ def resolve_and_validate_ips(hostname: str) -> tuple[str, ...]:
         raise TargetValidationError(f"DNS no devolvió direcciones IP para '{hostname}'.")
 
     for ip_str in unique_ips:
-        if not is_public_routable_ip(ip_str):
+        if not is_ip_allowed_for_scan(hostname, ip_str):
             raise SSRFBlockedError(
                 f"El dominio '{hostname}' resuelve a una IP protegida ({ip_str}). Bloqueado por anti-SSRF.",
                 details={"hostname": hostname, "blocked_ip": ip_str},
@@ -329,7 +427,13 @@ def safe_http_get(
                 raise TargetValidationError("URL sin hostname válido durante petición HTTP.")
 
             _validate_hostname_syntax(parsed.hostname)
-            resolve_and_validate_ips(parsed.hostname)
+            resolved_ips = resolve_and_validate_ips(parsed.hostname)
+            for ip_str in resolved_ips:
+                if not is_ip_allowed_for_scan(parsed.hostname, ip_str):
+                    raise SSRFBlockedError(
+                        f"Dirección IP '{ip_str}' bloqueada por política anti-SSRF durante petición HTTP.",
+                        details={"hostname": parsed.hostname, "blocked_ip": ip_str},
+                    )
 
             visited_chain.append(current_url)
             with client.stream("GET", current_url, headers=request_headers) as response:

@@ -117,6 +117,32 @@ def test_nmap_recon_scanner_detects_exposed_ports_safely(monkeypatch: pytest.Mon
 
 def test_http_headers_scanner_grades_and_tags_owasp(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_http_get(url: str, **_kwargs: object):
+        if url.endswith("/robots.txt"):
+            robots_body = "User-agent: *\nDisallow: /admin\nDisallow: /backup\n"
+            return (
+                SafeHttpResponse(
+                    status_code=200,
+                    url=url,
+                    headers=httpx.Headers({"content-type": "text/plain"}),
+                    set_cookies=(),
+                    content=robots_body.encode(),
+                    text=robots_body,
+                ),
+                [url],
+            )
+        if url.endswith("/sitemap.xml"):
+            sm_body = '<?xml version="1.0"?><urlset><url><loc>https://example.com/</loc></url></urlset>'
+            return (
+                SafeHttpResponse(
+                    status_code=200,
+                    url=url,
+                    headers=httpx.Headers({"content-type": "application/xml"}),
+                    set_cookies=(),
+                    content=sm_body.encode(),
+                    text=sm_body,
+                ),
+                [url],
+            )
         if "nonexistent-404" in url:
             body = "Werkzeug powered traceback: File '/app/views.py', line 12"
             return (
@@ -155,6 +181,9 @@ def test_http_headers_scanner_grades_and_tags_owasp(monkeypatch: pytest.MonkeyPa
     owasp_codes = {f.owasp_category_code for f in result.findings}
     assert {"A02:2025", "A05:2025", "A07:2025", "A10:2025"}.issubset(owasp_codes)
     assert result.raw_output["grade"] in {"D", "F"}
+    assert result.raw_output["discovery_files"]["robots_txt"]["present"] is True
+    assert result.raw_output["discovery_files"]["sitemap_xml"]["url_count"] == 1
+    assert any("robots.txt" in f.title for f in result.findings)
     csp_finding = next(f for f in result.findings if "Content-Security-Policy" in f.title)
     assert "nginx" in csp_finding.remediation_snippets
     assert "apache" in csp_finding.remediation_snippets
@@ -289,7 +318,14 @@ def test_tech_supply_chain_scanner_detects_missing_sri_and_cves(
                             "id": "CVE-2020-11022",
                             "descriptions": [{"lang": "en", "value": "XSS in jQuery"}],
                             "metrics": {
-                                "cvssMetricV31": [{"cvssData": {"baseScore": 6.1}}]
+                                "cvssMetricV31": [
+                                    {
+                                        "cvssData": {
+                                            "baseScore": 6.1,
+                                            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N",
+                                        }
+                                    }
+                                ]
                             },
                         }
                     }
@@ -307,3 +343,4 @@ def test_tech_supply_chain_scanner_detects_missing_sri_and_cves(
     cve_findings = [f for f in result.findings if f.cve_ids]
     assert len(cve_findings) >= 1
     assert "CVE-2020-11022" in cve_findings[0].cve_ids
+    assert cve_findings[0].cvss_vector == "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"

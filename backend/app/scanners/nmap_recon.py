@@ -2,15 +2,22 @@
 
 from typing import Any
 
-import nmap
+from lxml import etree
 
 from app.core.config import get_settings
 from app.core.exceptions import ScannerExecutionError, SSRFBlockedError
-from app.core.security import is_public_routable_ip, run_safe_command, safe_http_get
+from app.core.security import is_ip_allowed_for_scan, run_safe_command, safe_http_get
 from app.models.enums import ScanProfile, SeverityLevel
 from app.scanners.base import BaseAuditScanner, FindingDraft, ModuleScanResult, ScanContext
 
 settings = get_settings()
+
+_HARDENED_XML_PARSER = etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    dtd_validation=False,
+    load_dtd=False,
+)
 
 # Parameterized Nmap arguments per profile using unprivileged TCP connect scan (-sT)
 # and explicit '--' terminator to prevent argument injection.
@@ -146,7 +153,7 @@ class NmapReconScanner(BaseAuditScanner):
     default_owasp_categories = ["A02:2025", "A01:2025"]
 
     def run(self, ctx: ScanContext) -> ModuleScanResult:
-        if not is_public_routable_ip(ctx.resolved_ip):
+        if not is_ip_allowed_for_scan(ctx.hostname, ctx.resolved_ip):
             raise SSRFBlockedError(
                 f"IP objetivo '{ctx.resolved_ip}' rechazada antes de ejecutar Nmap."
             )
@@ -166,28 +173,7 @@ class NmapReconScanner(BaseAuditScanner):
                 f"{completed.stderr.strip()[:300]}"
             )
 
-        scanner = nmap.PortScanner()
-        parsed = scanner.analyse_nmap_xml_scan(nmap_xml_output=completed.stdout)
-        scan_hosts = parsed.get("scan", {})
-        host_data = scan_hosts.get(ctx.resolved_ip) or (next(iter(scan_hosts.values()), {}))
-
-        open_ports: list[dict[str, Any]] = []
-        tcp_ports = host_data.get("tcp", {}) if isinstance(host_data, dict) else {}
-
-        for port_num, info in sorted(tcp_ports.items()):
-            if info.get("state") != "open":
-                continue
-            open_ports.append(
-                {
-                    "port": int(port_num),
-                    "protocol": "tcp",
-                    "state": info.get("state", "open"),
-                    "service": info.get("name", "unknown"),
-                    "product": info.get("product", ""),
-                    "version": info.get("version", ""),
-                    "extrainfo": info.get("extrainfo", ""),
-                }
-            )
+        open_ports = self._parse_nmap_xml(completed.stdout, ctx.resolved_ip)
 
         ctx.log(
             f"Nmap detectó {len(open_ports)} puerto(s) TCP abierto(s).",
@@ -235,6 +221,67 @@ class NmapReconScanner(BaseAuditScanner):
                 "exposed_endpoints_count": len(exposed_endpoints),
             },
         )
+
+    @staticmethod
+    def _parse_nmap_xml(xml_output: str, target_ip: str) -> list[dict[str, Any]]:
+        """Parse Nmap -oX XML output safely without requiring python-nmap/nmap CLI."""
+        if not xml_output or not xml_output.strip():
+            return []
+
+        try:
+            root = etree.fromstring(  # noqa: S320
+                xml_output.encode("utf-8"),
+                parser=_HARDENED_XML_PARSER,
+            )
+        except etree.XMLSyntaxError as exc:
+            raise ScannerExecutionError("La salida XML de Nmap no es válida.") from exc
+
+        hosts = root.findall("host")
+        if not hosts:
+            return []
+
+        target_host = next(
+            (
+                host
+                for host in hosts
+                if any(addr.get("addr") == target_ip for addr in host.findall("address"))
+            ),
+            hosts[0],
+        )
+
+        open_ports: list[dict[str, Any]] = []
+        for port_el in target_host.findall("./ports/port"):
+            if port_el.get("protocol", "tcp") != "tcp":
+                continue
+
+            state_el = port_el.find("state")
+            if state_el is None or state_el.get("state") != "open":
+                continue
+
+            raw_port = port_el.get("portid")
+            if not raw_port:
+                continue
+            try:
+                port_num = int(raw_port)
+            except ValueError:
+                continue
+
+            service_el = port_el.find("service")
+            svc = service_el.attrib if service_el is not None else {}
+            open_ports.append(
+                {
+                    "port": port_num,
+                    "protocol": "tcp",
+                    "state": state_el.get("state", "open"),
+                    "service": svc.get("name") or "unknown",
+                    "product": svc.get("product") or "",
+                    "version": svc.get("version") or "",
+                    "extrainfo": svc.get("extrainfo") or "",
+                }
+            )
+
+        open_ports.sort(key=lambda item: item["port"])
+        return open_ports
 
     def _evaluate_open_ports(
         self, open_ports: list[dict[str, Any]], findings: list[FindingDraft]

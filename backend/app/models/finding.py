@@ -49,6 +49,7 @@ class Finding(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
     )
     cvss_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cvss_vector: Mapped[str | None] = mapped_column(String(128), nullable=True)
     cwe_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     cve_ids: Mapped[list[str]] = mapped_column(JSONVariant, default=list, nullable=False)
     affected_component: Mapped[str | None] = mapped_column(String(255), nullable=True)

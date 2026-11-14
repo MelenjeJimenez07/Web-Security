@@ -13,7 +13,7 @@ export type AuditStatus =
 export type ModuleStatus = "pending" | "running" | "completed" | "skipped" | "failed";
 export type SeverityLevel = "info" | "low" | "medium" | "high" | "critical";
 export type FindingStatus = "open" | "acknowledged" | "mitigated" | "false_positive";
-export type ReportFormat = "pdf" | "json";
+export type ReportFormat = "pdf" | "json" | "docx";
 export type ReportType = "executive" | "technical" | "full";
 
 export interface AuditReport {
@@ -168,6 +168,7 @@ export interface Finding {
   technical_description: string;
   severity: SeverityLevel;
   cvss_score: number | null;
+  cvss_vector: string | null;
   cwe_id: string | null;
   cve_ids: string[];
   affected_component: string | null;

@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import dsa, ec, rsa
 
 from app.core.exceptions import ScannerExecutionError, SSRFBlockedError
-from app.core.security import is_public_routable_ip
+from app.core.security import is_ip_allowed_for_scan
 from app.models.enums import SeverityLevel, TargetType
 from app.scanners.base import BaseAuditScanner, FindingDraft, ModuleScanResult, ScanContext
 
@@ -37,7 +37,7 @@ class SslTlsScanner(BaseAuditScanner):
     default_owasp_categories = ["A04:2025"]
 
     def run(self, ctx: ScanContext) -> ModuleScanResult:
-        if not is_public_routable_ip(ctx.resolved_ip):
+        if not is_ip_allowed_for_scan(ctx.hostname, ctx.resolved_ip):
             raise SSRFBlockedError(
                 f"IP '{ctx.resolved_ip}' bloqueada antes de inspección SSL/TLS."
             )

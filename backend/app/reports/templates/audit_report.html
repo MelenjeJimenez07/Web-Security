@@ -133,6 +133,27 @@
     .comp-warning { background: #fef3c7; color: #92400e; }
     .comp-critical { background: #fee2e2; color: #991b1b; }
 
+    .risk-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 14px;
+      font-size: 8pt;
+      text-align: center;
+    }
+    .risk-table th, .risk-table td {
+      border: 1px solid #cbd5e1;
+      padding: 6px 4px;
+    }
+    .risk-table th {
+      background: #0f172a;
+      color: #f8fafc;
+    }
+    .zone-very_low { background: #ecfdf5; color: #065f46; }
+    .zone-low { background: #e0f2fe; color: #0369a1; }
+    .zone-medium { background: #fef3c7; color: #92400e; }
+    .zone-high { background: #ffedd5; color: #9a3412; }
+    .zone-critical { background: #fee2e2; color: #991b1b; font-weight: bold; }
+
     .finding-card {
       border: 1px solid #cbd5e1;
       border-radius: 6px;
@@ -278,6 +299,33 @@
     </tbody>
   </table>
 
+  {% if risk_matrix %}
+  <h2>2.1 Matriz de Riesgo (Probabilidad × Impacto)</h2>
+  <table class="risk-table">
+    <thead>
+      <tr>
+        <th>Probabilidad \ Impacto</th>
+        {% for imp in risk_matrix.impact_levels %}
+          <th>{{ imp.label }} ({{ imp.level }})</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in risk_matrix.rows %}
+      <tr>
+        <th style="text-align: left; padding-left: 8px;">{{ row.label }} ({{ row.likelihood }})</th>
+        {% for cell in row.cells %}
+          <td class="zone-{{ cell.zone_key }}">
+            <div><strong>{{ cell.count }}</strong></div>
+            <div style="font-size: 7pt;">{{ cell.zone_label }}</div>
+          </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
   {% if report_metadata.report_type != "executive" %}
   <div class="page-break"></div>
   <h2>3. Hallazgos Detallados por Categoría OWASP Top 10:2025</h2>
@@ -296,6 +344,9 @@
             <span class="mono" style="color: #475569; margin-left: 6px;">Módulo: {{ f.module_key }}</span>
           </div>
           <div class="finding-title">{{ f.title }}</div>
+          {% if f.cvss_vector %}
+            <div class="mono" style="color: #92400e; font-size: 7.5pt; margin-bottom: 4px;">Vector CVSS: {{ f.cvss_vector }}</div>
+          {% endif %}
           {% if f.affected_component %}
             <div class="mono" style="color: #0369a1; margin-bottom: 4px;">Componente: {{ f.affected_component }}</div>
           {% endif %}

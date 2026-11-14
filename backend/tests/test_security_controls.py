@@ -131,6 +131,62 @@ class TestAntiSSRF:
         with pytest.raises(SSRFBlockedError):
             safe_http_get("https://example.com")
 
+    def test_lab_allowlist_permits_only_configured_dev_target(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import security as sec_mod
+
+        monkeypatch.setattr(sec_mod.settings, "APP_ENV", "development")
+        monkeypatch.setattr(sec_mod.settings, "ALLOW_LAB_LOCAL_TARGETS", True)
+        monkeypatch.setattr(
+            sec_mod.settings,
+            "LAB_TARGET_ALLOWLIST",
+            ["localhost", "host.docker.internal"],
+        )
+
+        ttype, norm, host, _, port = parse_and_normalize_target("http://localhost:3001")
+        assert ttype == TargetType.URL
+        assert norm == "http://localhost:3001"
+        assert host == "localhost"
+        assert port == 3001
+
+        monkeypatch.setattr(
+            socket,
+            "getaddrinfo",
+            lambda *_a, **_kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))],
+        )
+        assert resolve_and_validate_ips("localhost") == ("127.0.0.1",)
+
+        # Non-allowlisted internal names remain strictly blocked
+        with pytest.raises(SSRFBlockedError):
+            parse_and_normalize_target("http://192.168.1.50/admin")
+        with pytest.raises(SSRFBlockedError):
+            resolve_and_validate_ips("192.168.1.50")
+
+    def test_lab_allowlist_always_blocks_metadata_and_production(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import security as sec_mod
+
+        monkeypatch.setattr(sec_mod.settings, "ALLOW_LAB_LOCAL_TARGETS", True)
+        monkeypatch.setattr(
+            sec_mod.settings,
+            "LAB_TARGET_ALLOWLIST",
+            ["localhost", "metadata.google.internal", "169.254.169.254"],
+        )
+
+        # Even in development, cloud metadata hostnames and IPs are unconditionally blocked
+        monkeypatch.setattr(sec_mod.settings, "APP_ENV", "development")
+        with pytest.raises(SSRFBlockedError):
+            parse_and_normalize_target("http://metadata.google.internal/")
+        with pytest.raises(SSRFBlockedError):
+            resolve_and_validate_ips("169.254.169.254")
+
+        # In production, allowlist is completely inactive
+        monkeypatch.setattr(sec_mod.settings, "APP_ENV", "production")
+        with pytest.raises(SSRFBlockedError):
+            parse_and_normalize_target("http://localhost:3001")
+
 
 class TestAntiCommandInjection:
     def test_run_safe_command_forces_shell_false(self, monkeypatch: pytest.MonkeyPatch) -> None:

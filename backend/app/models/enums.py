@@ -81,6 +81,7 @@ class ReportFormat(str, enum.Enum):
 
     PDF = "pdf"
     JSON = "json"
+    DOCX = "docx"
 
 
 class ReportType(str, enum.Enum):

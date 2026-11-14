@@ -306,7 +306,9 @@ class TechSupplyChainScanner(BaseAuditScanner):
                 continue
 
             matches.append({"technology": tech["label"], "cves": cves})
-            max_cvss = max((c["cvss_score"] or 0.0) for c in cves)
+            top_cve = max(cves, key=lambda c: c["cvss_score"] or 0.0)
+            max_cvss = top_cve["cvss_score"] or 0.0
+            top_vector = top_cve.get("cvss_vector")
             severity = self._cvss_to_severity(max_cvss)
             cve_ids = [c["id"] for c in cves]
 
@@ -323,6 +325,7 @@ class TechSupplyChainScanner(BaseAuditScanner):
                     cwe_id="CWE-1104",
                     cve_ids=cve_ids,
                     cvss_score=max_cvss or None,
+                    cvss_vector=top_vector,
                     evidence={"technology": tech, "cves": cves},
                     remediation_steps=(
                         f"Actualizar {tech['name']} (versión detectada {ver}) a la última versión "
@@ -386,11 +389,12 @@ class TechSupplyChainScanner(BaseAuditScanner):
                 (d.get("value", "") for d in descriptions if d.get("lang") == "en"),
                 "",
             )
-            cvss_score = self._extract_cvss_score(cve_obj.get("metrics", {}))
+            cvss_score, cvss_vector = self._extract_cvss_metrics(cve_obj.get("metrics", {}))
             results.append(
                 {
                     "id": cve_id,
                     "cvss_score": cvss_score,
+                    "cvss_vector": cvss_vector,
                     "summary": desc_text[:300],
                 }
             )
@@ -404,15 +408,18 @@ class TechSupplyChainScanner(BaseAuditScanner):
         return results
 
     @staticmethod
-    def _extract_cvss_score(metrics: dict[str, Any]) -> float | None:
+    def _extract_cvss_metrics(metrics: dict[str, Any]) -> tuple[float | None, str | None]:
         for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
             metric_list = metrics.get(key)
             if isinstance(metric_list, list) and metric_list:
                 cvss_data = metric_list[0].get("cvssData", {})
                 score = cvss_data.get("baseScore")
-                if isinstance(score, (int, float)):
-                    return float(score)
-        return None
+                vector = cvss_data.get("vectorString")
+                parsed_score = float(score) if isinstance(score, (int, float)) else None
+                parsed_vector = str(vector).strip() if isinstance(vector, str) and vector.strip() else None
+                if parsed_score is not None or parsed_vector is not None:
+                    return parsed_score, parsed_vector
+        return None, None
 
     @staticmethod
     def _cvss_to_severity(score: float) -> SeverityLevel:

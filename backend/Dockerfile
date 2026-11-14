@@ -35,17 +35,17 @@ RUN groupadd -r -g 10001 websec && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-
-RUN mkdir -p /app/data/reports && \
-    chmod +x /app/entrypoint.sh && \
-    chown -R websec:websec /app
-
 
 # -----------------------------------------------------------------------------
 # Target 1: FastAPI API Server (Minimal Attack Surface)
 # -----------------------------------------------------------------------------
 FROM base AS api
+
+COPY --chown=websec:websec . .
+RUN mkdir -p /app/data/reports && \
+    chmod +x /app/entrypoint.sh && \
+    chown websec:websec /app && \
+    chown -R websec:websec /app/data
 
 USER websec
 EXPOSE 8000
@@ -70,6 +70,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && nmap --version \
     && dig -v \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --chown=websec:websec . .
+RUN mkdir -p /app/data/reports && \
+    chmod +x /app/entrypoint.sh && \
+    chown websec:websec /app && \
+    chown -R websec:websec /app/data
 
 USER websec
 

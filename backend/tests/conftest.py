@@ -1,5 +1,6 @@
 """Shared pytest fixtures for database, OWASP catalog seeding, and scanner contexts."""
 
+import os
 import uuid
 from collections.abc import Generator
 from typing import Any
@@ -8,10 +9,15 @@ import pytest
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.base import Base
-from app.db.seed import seed_owasp_categories
-from app.models.enums import ScanProfile, TargetType
-from app.scanners.base import ScanContext
+# Guard against empty env overrides (e.g. `-e SYNC_DATABASE_URL=`) breaking module-level create_engine
+for _env_key in ("DATABASE_URL", "SYNC_DATABASE_URL"):
+    if os.environ.get(_env_key) == "":
+        os.environ.pop(_env_key, None)
+
+from app.db.base import Base  # noqa: E402
+from app.db.seed import seed_owasp_categories  # noqa: E402
+from app.models.enums import ScanProfile, TargetType  # noqa: E402
+from app.scanners.base import ScanContext  # noqa: E402
 
 
 @pytest.fixture
