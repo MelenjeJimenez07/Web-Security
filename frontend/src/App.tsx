@@ -147,6 +147,7 @@ export default function App() {
               selectedAuditId={selectedAuditId}
               onSelectAudit={setSelectedAuditId}
               onRefreshList={refreshAudits}
+              onLaunchForAsset={handleLaunchForAsset}
             />
           )}
 

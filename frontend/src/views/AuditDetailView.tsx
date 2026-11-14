@@ -9,6 +9,8 @@ import {
   FileText,
   Loader2,
   RefreshCw,
+  RotateCcw,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import { FindingsExplorer } from "@/components/audits/FindingsExplorer";
@@ -46,6 +48,86 @@ interface AuditDetailViewProps {
   selectedAuditId: string | null;
   onSelectAudit: (auditId: string | null) => void;
   onRefreshList: () => Promise<void>;
+  onLaunchForAsset: (assetId: string) => void;
+}
+
+interface AuditLifecycleActionsProps {
+  auditId: string;
+  assetId: string;
+  canDelete: boolean;
+  deletingAuditId: string | null;
+  confirmDeleteId: string | null;
+  onReaudit: (assetId: string) => void;
+  onRequestDelete: (auditId: string | null) => void;
+  onConfirmDelete: (auditId: string) => void;
+}
+
+function AuditLifecycleActions({
+  auditId,
+  assetId,
+  canDelete,
+  deletingAuditId,
+  confirmDeleteId,
+  onReaudit,
+  onRequestDelete,
+  onConfirmDelete,
+}: AuditLifecycleActionsProps) {
+  const isConfirming = confirmDeleteId === auditId;
+  const isDeleting = deletingAuditId === auditId;
+  const isBusyOther = deletingAuditId !== null && deletingAuditId !== auditId;
+
+  if (isConfirming) {
+    return (
+      <>
+        <Button
+          size="sm"
+          variant="destructive"
+          disabled={isDeleting}
+          onClick={() => void onConfirmDelete(auditId)}
+        >
+          {isDeleting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="h-3.5 w-3.5" />
+          )}
+          {isDeleting ? "Eliminando..." : "Confirmar"}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={isDeleting}
+          onClick={() => onRequestDelete(null)}
+        >
+          Cancelar
+        </Button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        title="Lanzar una nueva auditoría sobre este activo"
+        onClick={() => onReaudit(assetId)}
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+        Volver a auditar
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="text-red-400 hover:bg-red-950/50 hover:text-red-300"
+        disabled={!canDelete || isBusyOther}
+        title={canDelete ? "Eliminar esta auditoría" : "Espera a que finalice para eliminar"}
+        onClick={() => onRequestDelete(auditId)}
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+        Eliminar
+      </Button>
+    </>
+  );
 }
 
 function moduleStatusBadge(status: ModuleStatus) {
@@ -88,12 +170,15 @@ export function AuditDetailView({
   selectedAuditId,
   onSelectAudit,
   onRefreshList,
+  onLaunchForAsset,
 }: AuditDetailViewProps) {
   const [detail, setDetail] = useState<AuditRunDetail | null>(null);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [reports, setReports] = useState<AuditReport[]>([]);
   const [reportType, setReportType] = useState<ReportType>("full");
   const [exportingFormat, setExportingFormat] = useState<ReportFormat | null>(null);
+  const [deletingAuditId, setDeletingAuditId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<string>("console");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +239,26 @@ export function AuditDetailView({
     }
   };
 
+  const handleDeleteAudit = async (auditId: string) => {
+    setDeletingAuditId(auditId);
+    setError(null);
+    try {
+      await api.deleteAudit(auditId);
+      setConfirmDeleteId(null);
+      if (selectedAuditId === auditId) {
+        setDetail(null);
+        setFindings([]);
+        setReports([]);
+        onSelectAudit(null);
+      }
+      await onRefreshList();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "No se pudo eliminar la auditoría.");
+    } finally {
+      setDeletingAuditId(null);
+    }
+  };
+
   const handleFindingStatusChange = async (findingId: string, status: FindingStatus) => {
     const updated = await api.updateFindingStatus(findingId, status);
     setFindings((prev) => prev.map((f) => (f.id === findingId ? updated : f)));
@@ -182,6 +287,8 @@ export function AuditDetailView({
             Actualizar
           </Button>
         </div>
+
+        {error && <Alert variant="destructive">{error}</Alert>}
 
         <Card>
           <CardContent className="pt-5">
@@ -251,9 +358,21 @@ export function AuditDetailView({
                             </div>
                           </td>
                           <td className="py-3 text-right">
-                            <Button size="sm" onClick={() => onSelectAudit(run.id)}>
-                              Abrir Consola / Hallazgos
-                            </Button>
+                            <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                              <Button size="sm" onClick={() => onSelectAudit(run.id)}>
+                                Abrir Consola / Hallazgos
+                              </Button>
+                              <AuditLifecycleActions
+                                auditId={run.id}
+                                assetId={run.asset_id}
+                                canDelete={isTerminalAuditStatus(run.status)}
+                                deletingAuditId={deletingAuditId}
+                                confirmDeleteId={confirmDeleteId}
+                                onReaudit={onLaunchForAsset}
+                                onRequestDelete={setConfirmDeleteId}
+                                onConfirmDelete={handleDeleteAudit}
+                              />
+                            </div>
                           </td>
                         </tr>
                       );
@@ -272,7 +391,15 @@ export function AuditDetailView({
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={() => onSelectAudit(null)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setConfirmDeleteId(null);
+              setError(null);
+              onSelectAudit(null);
+            }}
+          >
             <ArrowLeft className="h-3.5 w-3.5" />
             Historial
           </Button>
@@ -297,6 +424,19 @@ export function AuditDetailView({
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             Refrescar
           </Button>
+
+          {detail && (
+            <AuditLifecycleActions
+              auditId={detail.id}
+              assetId={detail.asset.id}
+              canDelete={isTerminalAuditStatus(detail.status)}
+              deletingAuditId={deletingAuditId}
+              confirmDeleteId={confirmDeleteId}
+              onReaudit={onLaunchForAsset}
+              onRequestDelete={setConfirmDeleteId}
+              onConfirmDelete={handleDeleteAudit}
+            />
+          )}
 
           {detail && isTerminalAuditStatus(detail.status) && (
             <>

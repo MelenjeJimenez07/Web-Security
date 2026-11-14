@@ -128,6 +128,9 @@ export const api = {
 
   getAuditDetail: (auditId: string) => requestJson<AuditRunDetail>(`/audits/${auditId}`),
 
+  deleteAudit: (auditId: string) =>
+    requestJson<void>(`/audits/${auditId}`, { method: "DELETE" }),
+
   listAuditFindings: (
     auditId: string,
     filters?: {

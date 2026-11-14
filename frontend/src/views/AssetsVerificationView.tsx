@@ -25,6 +25,16 @@ interface AssetsVerificationViewProps {
   onLaunchForAsset: (assetId: string) => void;
 }
 
+function findDuplicateAsset(assets: Asset[], errorMessage: string): Asset | null {
+  const quotedTarget = errorMessage.match(/'([^']+)'/)?.[1]?.toLowerCase();
+  if (quotedTarget) {
+    const exact = assets.find((asset) => asset.normalized_target.toLowerCase() === quotedTarget);
+    if (exact) return exact;
+  }
+  const lowered = errorMessage.toLowerCase();
+  return assets.find((asset) => lowered.includes(asset.normalized_target.toLowerCase())) ?? null;
+}
+
 export function AssetsVerificationView({
   assets,
   onRefreshAssets,
@@ -38,6 +48,7 @@ export function AssetsVerificationView({
   const [creating, setCreating] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [duplicateAsset, setDuplicateAsset] = useState<Asset | null>(null);
 
   const [selectedAsset, setSelectedAsset] = useState<AssetDetail | null>(null);
   const [verifMethod, setVerifMethod] = useState<VerificationMethod>("dns_txt");
@@ -49,6 +60,7 @@ export function AssetsVerificationView({
     e.preventDefault();
     setFormError(null);
     setFormSuccess(null);
+    setDuplicateAsset(null);
     setCreating(true);
     try {
       const created = await api.createAsset({
@@ -72,8 +84,10 @@ export function AssetsVerificationView({
     } catch (err) {
       if (err instanceof ApiError) {
         setFormError(err.message);
+        setDuplicateAsset(err.status === 409 ? findDuplicateAsset(assets, err.message) : null);
       } else {
         setFormError("No se pudo registrar el activo.");
+        setDuplicateAsset(null);
       }
     } finally {
       setCreating(false);
@@ -191,7 +205,28 @@ export function AssetsVerificationView({
           </CardHeader>
           <CardContent>
             <form onSubmit={handleCreateAsset} className="space-y-4">
-              {formError && <Alert variant="destructive">{formError}</Alert>}
+              {formError && (
+                <Alert variant="destructive">
+                  <div className="space-y-2">
+                    <p>{formError}</p>
+                    {duplicateAsset &&
+                      (duplicateAsset.is_verified ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onLaunchForAsset(duplicateAsset.id)}
+                        >
+                          Volver a auditar activo existente
+                        </Button>
+                      ) : (
+                        <p className="text-xs text-red-200/90">
+                          Activo registrado ({duplicateAsset.name}) pendiente de verificación en la tabla de inventario.
+                        </p>
+                      ))}
+                  </div>
+                </Alert>
+              )}
               {formSuccess && <Alert variant="success">{formSuccess}</Alert>}
 
               <div className="space-y-1.5">

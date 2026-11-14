@@ -15,11 +15,13 @@ from sqlalchemy.orm import selectinload
 from app.core.config import get_settings
 from app.core.exceptions import (
     AuthorizationRequiredError,
+    ConflictError,
     DomainNotVerifiedError,
     ResourceNotFoundError,
     ScannerExecutionError,
     SSRFBlockedError,
 )
+from app.reports.exporter import resolve_safe_report_path
 from app.core.logging import record_security_event_async
 from app.core.security import validate_target_ssrf
 from app.db.session import AsyncSessionLocal, get_async_db
@@ -341,6 +343,66 @@ async def get_audit_detail(
             AuditModuleExecutionOut.model_validate(me) for me in run.module_executions
         ],
         owasp_distribution=owasp_dist,
+    )
+
+
+def _remove_audit_report_files(file_paths: list[str]) -> None:
+    """Safely delete exported report files that reside within REPORTS_DIR."""
+    for file_path in file_paths:
+        try:
+            safe_path = resolve_safe_report_path(file_path)
+        except ResourceNotFoundError:
+            continue
+        try:
+            safe_path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+@router.delete("/audits/{audit_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_audit(
+    audit_id: uuid.UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_async_db),
+) -> None:
+    """Delete a finished/failed/cancelled audit run and clean up its report artifacts."""
+    run = await db.scalar(
+        select(AuditRun)
+        .options(
+            selectinload(AuditRun.asset),
+            selectinload(AuditRun.reports),
+        )
+        .where(AuditRun.id == audit_id)
+    )
+    if run is None:
+        raise ResourceNotFoundError(f"Auditoría '{audit_id}' no encontrada.")
+
+    if run.status not in _TERMINAL_AUDIT_STATUSES:
+        raise ConflictError(
+            "No se puede eliminar una auditoría en ejecución. Espera a que finalice."
+        )
+
+    asset_id = run.asset_id
+    asset_target = run.asset.normalized_target if run.asset else str(asset_id)
+    _remove_audit_report_files([report.file_path for report in run.reports])
+
+    await db.delete(run)
+    await db.commit()
+
+    src_ip = request.client.host if request.client else None
+    await record_security_event_async(
+        db,
+        event_type="AUDIT_DELETED",
+        severity="warning",
+        actor="dashboard-user",
+        source_ip=src_ip,
+        asset_id=asset_id,
+        audit_run_id=None,
+        message=f"Auditoría '{audit_id}' eliminada para el activo {asset_target}.",
+        details={
+            "deleted_audit_run_id": str(audit_id),
+            "target": asset_target,
+        },
     )
 
 
